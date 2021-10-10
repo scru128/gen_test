@@ -10,16 +10,12 @@ randomness field every second, and so on.
 any-command-that-prints-identifiers-infinitely | scru128-test
 ```
 
-## Build
+## Installation
 
 [Install Rust](https://www.rust-lang.org/tools/install) and build from source:
 
 ```bash
-git clone https://github.com/scru128/gen_test.git
-cd gen_test
-cargo build --release
-
-./target/release/scru128-test --help
+cargo install --git https://github.com/scru128/gen_test.git
 ```
 
 ## License

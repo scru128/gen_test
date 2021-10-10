@@ -89,7 +89,7 @@ fn main() {
         // Triggered per STATS_INTERVAL seconds
         if e.timestamp > st.ts_last_stats_print + STATS_INTERVAL {
             if st.ts_last_stats_print > 0 {
-                st.print();
+                st.print().unwrap();
             }
             st.ts_last_stats_print = e.timestamp;
         }
@@ -103,7 +103,7 @@ fn main() {
     }
 
     if st.n_processed > 0 {
-        st.print();
+        st.print().unwrap();
     } else {
         eprintln!("Error: no valid ID processed");
     }
@@ -132,56 +132,50 @@ struct Status {
 }
 
 impl Status {
-    fn print(&self) {
+    fn print(&self) -> Result<(), io::Error> {
         let time_elapsed = self.ts_last - self.ts_first;
 
         let mut buf = io::BufWriter::new(io::stdout());
-        writeln!(buf).unwrap();
-        writeln!(buf, "{:<52} {:>8} {:>12}", "STAT", "EXPECTED", "ACTUAL").unwrap();
+        writeln!(buf)?;
+        writeln!(buf, "{:<52} {:>8} {:>12}", "STAT", "EXPECTED", "ACTUAL")?;
         writeln!(
             buf,
             "{:<52} {:>8} {:>12.1}",
             "Seconds from first input ID to last (sec)",
             "NA",
             time_elapsed as f64 / 1000.0
-        )
-        .unwrap();
+        )?;
         writeln!(
             buf,
             "{:<52} {:>8} {:>12}",
             "Number of valid IDs processed", "NA", self.n_processed
-        )
-        .unwrap();
+        )?;
         writeln!(
             buf,
             "{:<52} {:>8} {:>12}",
             "Number of invalid IDs skipped", 0, self.n_errors
-        )
-        .unwrap();
+        )?;
         writeln!(
             buf,
             "{:<52} {:>8} {:>12.1}",
             "Mean number of IDs per millisecond",
             "NA",
             self.n_processed as f64 / time_elapsed as f64
-        )
-        .unwrap();
+        )?;
         writeln!(
             buf,
             "{:<52} {:>8} {:>12.3}",
             "Mean interval of counter updates (msec)",
             "~1",
             self.sum_intervals_counter_update as f64 / self.n_counter_update as f64
-        )
-        .unwrap();
+        )?;
         writeln!(
             buf,
             "{:<52} {:>8} {:>12.3}",
             "Mean interval of per_sec_random updates (msec)",
             "~1000",
             self.sum_intervals_per_sec_random_update as f64 / self.n_per_sec_random_update as f64
-        )
-        .unwrap();
+        )?;
 
         writeln!(
             buf,
@@ -189,8 +183,7 @@ impl Status {
             "1/0 ratio of each bit in counter at reset (min-max)",
             "~0.500",
             summarize_n_ones_by_bit(&self.n_ones_by_bit_counter, self.n_counter_update + 1)
-        )
-        .unwrap();
+        )?;
         writeln!(
             buf,
             "{:<52} {:>8} {:>12}",
@@ -200,16 +193,16 @@ impl Status {
                 &self.n_ones_by_bit_per_sec_random,
                 self.n_per_sec_random_update + 1
             )
-        )
-        .unwrap();
+        )?;
         writeln!(
             buf,
             "{:<52} {:>8} {:>12}",
             "1/0 ratio of each bit in per_gen_random (min-max)",
             "~0.500",
             summarize_n_ones_by_bit(&self.n_ones_by_bit_per_gen_random, self.n_processed)
-        )
-        .unwrap();
+        )?;
+
+        Ok(())
     }
 }
 

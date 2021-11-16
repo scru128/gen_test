@@ -1,6 +1,7 @@
 use std::env::args;
 use std::io;
 use std::io::prelude::*;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 const STATS_INTERVAL: u64 = 10 * 1000;
 
@@ -89,9 +90,11 @@ fn main() {
         // Triggered per STATS_INTERVAL seconds
         if e.timestamp > st.ts_last_stats_print + STATS_INTERVAL {
             if st.ts_last_stats_print > 0 {
+                st.ts_last_stats_print = e.timestamp;
                 st.print().unwrap();
+            } else {
+                st.ts_last_stats_print = e.timestamp;
             }
-            st.ts_last_stats_print = e.timestamp;
         }
 
         // Prepare for next loop
@@ -133,7 +136,7 @@ struct Status {
 
 impl Status {
     fn print(&self) -> Result<(), io::Error> {
-        let time_elapsed = self.ts_last - self.ts_first;
+        let time_elapsed = self.ts_last_stats_print - self.ts_first;
 
         let mut buf = io::BufWriter::new(io::stdout());
         writeln!(buf)?;
@@ -157,10 +160,17 @@ impl Status {
         )?;
         writeln!(
             buf,
-            "{:<52} {:>8} {:>12.1}",
+            "{:<52} {:>8} {:>12.3}",
             "Mean number of IDs per millisecond",
             "NA",
             self.n_processed as f64 / time_elapsed as f64
+        )?;
+        writeln!(
+            buf,
+            "{:<52} {:>8} {:>12.3}",
+            "Biased current time less timestamp in last ID (sec)",
+            "~0",
+            get_biased_current_time() - (self.ts_last_stats_print as f64) / 1000.0
         )?;
         writeln!(
             buf,
@@ -229,6 +239,14 @@ impl Identifier {
             per_gen_random: (int_value & 0xffff_ffff) as u32,
         }
     }
+}
+
+fn get_biased_current_time() -> f64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock may have gone backwards")
+        .as_secs_f64()
+        - 1577836800.0
 }
 
 /// Used to count the number of ones by bit number in the binary representations of integers.

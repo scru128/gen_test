@@ -19,6 +19,9 @@ fn main() {
         return;
     }
 
+    let stdin = io::stdin();
+    let mut reader = stdin.lock();
+    let mut buffer = String::with_capacity(32);
     println!(
         "Reading IDs from stdin and will show stats every {} seconds. Press Ctrl-C to quit.",
         STATS_INTERVAL / 1000
@@ -26,13 +29,13 @@ fn main() {
 
     let mut st = Status::default();
     let mut prev = Identifier::default();
-    for line in io::stdin().lock().lines() {
-        let str_value = line.unwrap();
-        let mut cs = str_value.chars();
-        if str_value.len() == 26
-            && cs.next().map_or(false, |c| c.is_digit(8))
-            && cs.all(|c| c.is_digit(32))
-        {
+    while reader.read_line(&mut buffer).unwrap() > 0 {
+        let line = buffer
+            .strip_suffix('\n')
+            .map_or(buffer.as_str(), |x| x.strip_suffix('\r').unwrap_or(x));
+        let opt = Identifier::new(line);
+        buffer.clear();
+        if opt.is_some() {
             st.n_processed += 1;
         } else {
             eprintln!("Error: invalid string representation");
@@ -40,7 +43,7 @@ fn main() {
             continue;
         }
 
-        let e = Identifier::new(&str_value);
+        let e = opt.unwrap();
         if e.str_value <= prev.str_value {
             eprintln!("Error: string representation not monotonically ordered");
             st.n_errors += 1;
@@ -62,7 +65,12 @@ fn main() {
         }
 
         // Triggered per line
-        count_ones_by_bit(&mut st.n_ones_by_bit_per_gen_random, e.per_gen_random);
+        if st.ts_first == 0 {
+            st.ts_first = e.timestamp;
+        }
+        st.ts_last = e.timestamp;
+
+        count_set_bits_by_pos(&mut st.n_ones_by_bit_per_gen_random, e.per_gen_random);
 
         // Triggered per millisecond
         if e.counter != prev.counter + COUNTER_INCREMENT {
@@ -72,7 +80,7 @@ fn main() {
             }
             st.ts_last_counter_update = e.timestamp;
 
-            count_ones_by_bit(&mut st.n_ones_by_bit_counter, e.counter);
+            count_set_bits_by_pos(&mut st.n_ones_by_bit_counter, e.counter);
         }
 
         // Triggered per second
@@ -84,24 +92,18 @@ fn main() {
             }
             st.ts_last_per_sec_random_update = e.timestamp;
 
-            count_ones_by_bit(&mut st.n_ones_by_bit_per_sec_random, e.per_sec_random);
+            count_set_bits_by_pos(&mut st.n_ones_by_bit_per_sec_random, e.per_sec_random);
         }
 
         // Triggered per STATS_INTERVAL seconds
         if e.timestamp > st.ts_last_stats_print + STATS_INTERVAL {
             if st.ts_last_stats_print > 0 {
-                st.ts_last_stats_print = e.timestamp;
                 st.print().unwrap();
-            } else {
-                st.ts_last_stats_print = e.timestamp;
             }
+            st.ts_last_stats_print = e.timestamp;
         }
 
         // Prepare for next loop
-        if st.ts_first == 0 {
-            st.ts_first = e.timestamp;
-        }
-        st.ts_last = e.timestamp;
         prev = e;
     }
 
@@ -136,7 +138,7 @@ struct Status {
 
 impl Status {
     fn print(&self) -> Result<(), io::Error> {
-        let time_elapsed = self.ts_last_stats_print - self.ts_first;
+        let time_elapsed = self.ts_last - self.ts_first;
 
         let mut buf = io::BufWriter::new(io::stdout());
         writeln!(buf)?;
@@ -170,7 +172,7 @@ impl Status {
             "{:<52} {:>8} {:>12.3}",
             "Biased current time less timestamp in last ID (sec)",
             "~0",
-            get_biased_current_time() - (self.ts_last_stats_print as f64) / 1000.0
+            get_biased_current_time() - (self.ts_last as f64) / 1000.0
         )?;
         writeln!(
             buf,
@@ -192,14 +194,14 @@ impl Status {
             "{:<52} {:>8} {:>12}",
             "1/0 ratio of each bit in counter at reset (min-max)",
             "~0.500",
-            summarize_n_ones_by_bit(&self.n_ones_by_bit_counter, self.n_counter_update + 1)
+            summarize_n_set_bits_by_pos(&self.n_ones_by_bit_counter, self.n_counter_update + 1)
         )?;
         writeln!(
             buf,
             "{:<52} {:>8} {:>12}",
             "1/0 ratio of each bit in per_sec_random (min-max)",
             "~0.500",
-            summarize_n_ones_by_bit(
+            summarize_n_set_bits_by_pos(
                 &self.n_ones_by_bit_per_sec_random,
                 self.n_per_sec_random_update + 1
             )
@@ -209,7 +211,7 @@ impl Status {
             "{:<52} {:>8} {:>12}",
             "1/0 ratio of each bit in per_gen_random (min-max)",
             "~0.500",
-            summarize_n_ones_by_bit(&self.n_ones_by_bit_per_gen_random, self.n_processed)
+            summarize_n_set_bits_by_pos(&self.n_ones_by_bit_per_gen_random, self.n_processed)
         )?;
 
         Ok(())
@@ -219,7 +221,7 @@ impl Status {
 /// Holds representations and internal field values of a SCRU128 ID.
 #[derive(Clone, Eq, PartialEq, Hash, Debug, Default)]
 struct Identifier {
-    str_value: String,
+    str_value: [u8; 26],
     int_value: u128,
     timestamp: u64,
     counter: u32,
@@ -228,16 +230,58 @@ struct Identifier {
 }
 
 impl Identifier {
-    fn new(str_value: &str) -> Self {
-        let int_value = u128::from_str_radix(str_value, 32).unwrap();
-        Self {
-            str_value: str_value.into(),
+    fn new(str_value: &str) -> Option<Self> {
+        const DECODE_MAP: [u8; 256] = [
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+            0x08, 0x09, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e,
+            0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c,
+            0x1d, 0x1e, 0x1f, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x0a,
+            0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18,
+            0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0xff,
+        ];
+
+        if str_value.len() != 26 {
+            return None;
+        }
+        let mut fixed_str = [0; 26];
+        let bs = str_value.as_bytes();
+
+        fixed_str[0] = bs[0];
+        let mut int_value = DECODE_MAP[bs[0] as usize] as u128;
+        if int_value > 7 {
+            return None;
+        }
+
+        for i in 1..26 {
+            fixed_str[i] = bs[i];
+            let n = DECODE_MAP[bs[i] as usize] as u128;
+            if n == 0xff {
+                return None;
+            }
+            int_value = (int_value << 5) | n;
+        }
+
+        Some(Self {
+            str_value: fixed_str,
             int_value,
             timestamp: (int_value >> 84) as u64,
             counter: ((int_value >> 56) & 0xfff_ffff) as u32,
             per_sec_random: ((int_value >> 32) & 0xff_ffff) as u32,
             per_gen_random: (int_value & 0xffff_ffff) as u32,
-        }
+        })
     }
 }
 
@@ -249,18 +293,19 @@ fn get_biased_current_time() -> f64 {
         - 1577836800.0
 }
 
-/// Used to count the number of ones by bit number in the binary representations of integers.
-fn count_ones_by_bit(counts: &mut [usize], bits: u32) {
-    let mut n = bits;
+/// Used to count the number of set bits by bit position in the binary representations of integers.
+#[allow(unused_mut)]
+fn count_set_bits_by_pos(counts: &mut [usize], mut n: u32) {
+    #[cfg(any(target_pointer_width = "32", target_pointer_width = "64"))]
+    let mut n: usize = n as usize;
+
     for i in 0..counts.len() {
-        if n & 1 == 1 {
-            counts[counts.len() - 1 - i] += 1;
-        }
+        counts[counts.len() - 1 - i] += (n & 1) as usize;
         n >>= 1;
     }
 }
 
-fn summarize_n_ones_by_bit(counts: &[usize], n_samples: usize) -> String {
+fn summarize_n_set_bits_by_pos(counts: &[usize], n_samples: usize) -> String {
     let mut min = 1.0;
     let mut max = 0.0;
 

@@ -1,9 +1,9 @@
 [package]
 name = "scru128-test"
-version = "0.1.3"
+version = "0.2.0"
 authors = ["LiosK <contact@mail.liosk.net>"]
 license = "Apache-2.0"
-edition = "2018"
+edition = "2021"
 description = "SCRU128 Generator Tester"
 repository = "https://github.com/scru128/gen_test"
 categories = ["command-line-utilities", "development-tools"]

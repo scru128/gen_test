@@ -5,8 +5,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 const STATS_INTERVAL: u64 = 10 * 1000;
 
-const COUNTER_INCREMENT: u32 = 1;
-
 fn main() {
     if let Some(arg) = args().nth(1) {
         let usage = "Usage: any-command-that-prints-identifiers-infinitely | scru128-test";
@@ -58,8 +56,17 @@ fn main() {
             eprintln!("Error: clock went backwards");
             st.n_errors += 1;
             continue;
-        } else if e.timestamp == prev.timestamp && e.counter <= prev.counter {
-            eprintln!("Error: counter not monotonically ordered within same timestamp");
+        } else if e.timestamp == prev.timestamp && e.counter_hi < prev.counter_hi {
+            eprintln!("Error: counter_hi went backwards within same timestamp");
+            st.n_errors += 1;
+            continue;
+        } else if e.timestamp == prev.timestamp
+            && e.counter_hi == prev.counter_hi
+            && e.counter_lo <= prev.counter_lo
+        {
+            eprintln!(
+                "Error: counter_lo not monotonically ordered within same timestamp and counter_hi"
+            );
             st.n_errors += 1;
             continue;
         }
@@ -70,29 +77,36 @@ fn main() {
         }
         st.ts_last = e.timestamp;
 
-        count_set_bits_by_pos(&mut st.n_ones_by_bit_per_gen_random, e.per_gen_random);
+        count_set_bits_by_pos(&mut st.n_ones_by_bit_entropy, e.entropy);
 
         // Triggered per millisecond
-        if e.counter != prev.counter + COUNTER_INCREMENT {
-            if st.ts_last_counter_update > 0 {
-                st.n_counter_update += 1;
-                st.sum_intervals_counter_update += e.timestamp - st.ts_last_counter_update;
+        if e.counter_lo != prev.counter_lo + 1
+            && !(e.counter_lo == 0 && prev.counter_lo == 0xff_ffff)
+        {
+            if st.ts_last_counter_lo_update > 0 {
+                st.n_counter_lo_update += 1;
+                st.sum_intervals_counter_lo_update += e.timestamp - st.ts_last_counter_lo_update;
             }
-            st.ts_last_counter_update = e.timestamp;
+            st.ts_last_counter_lo_update = e.timestamp;
 
-            count_set_bits_by_pos(&mut st.n_ones_by_bit_counter, e.counter);
+            count_set_bits_by_pos(&mut st.n_ones_by_bit_counter_lo, e.counter_lo);
         }
 
-        // Triggered per second
-        if e.per_sec_random != prev.per_sec_random {
-            if st.ts_last_per_sec_random_update > 0 {
-                st.n_per_sec_random_update += 1;
-                st.sum_intervals_per_sec_random_update +=
-                    e.timestamp - st.ts_last_per_sec_random_update;
+        // Triggered per second or at counter_hi increment
+        if e.counter_hi == prev.counter_hi + 1
+            && e.timestamp == prev.timestamp
+            && e.counter_lo == 0
+            && prev.counter_lo == 0xff_ffff
+        {
+            st.n_counter_hi_increment += 1;
+        } else if e.counter_hi != prev.counter_hi {
+            if st.ts_last_counter_hi_update > 0 {
+                st.n_counter_hi_update += 1;
+                st.sum_intervals_counter_hi_update += e.timestamp - st.ts_last_counter_hi_update;
             }
-            st.ts_last_per_sec_random_update = e.timestamp;
+            st.ts_last_counter_hi_update = e.timestamp;
 
-            count_set_bits_by_pos(&mut st.n_ones_by_bit_per_sec_random, e.per_sec_random);
+            count_set_bits_by_pos(&mut st.n_ones_by_bit_counter_hi, e.counter_hi);
         }
 
         // Triggered per STATS_INTERVAL seconds
@@ -121,17 +135,18 @@ struct Status {
     ts_first: u64,
     ts_last: u64,
 
-    n_ones_by_bit_per_gen_random: [usize; 32],
+    n_ones_by_bit_entropy: [usize; 32],
 
-    n_counter_update: usize,
-    ts_last_counter_update: u64,
-    sum_intervals_counter_update: u64,
-    n_ones_by_bit_counter: [usize; 28],
+    n_counter_lo_update: usize,
+    ts_last_counter_lo_update: u64,
+    sum_intervals_counter_lo_update: u64,
+    n_ones_by_bit_counter_lo: [usize; 24],
 
-    n_per_sec_random_update: usize,
-    ts_last_per_sec_random_update: u64,
-    sum_intervals_per_sec_random_update: u64,
-    n_ones_by_bit_per_sec_random: [usize; 24],
+    n_counter_hi_increment: usize,
+    n_counter_hi_update: usize,
+    ts_last_counter_hi_update: u64,
+    sum_intervals_counter_hi_update: u64,
+    n_ones_by_bit_counter_hi: [usize; 24],
 
     ts_last_stats_print: u64,
 }
@@ -170,48 +185,55 @@ impl Status {
         writeln!(
             buf,
             "{:<52} {:>8} {:>12.3}",
-            "Biased current time less timestamp in last ID (sec)",
+            "Current time less timestamp of last ID (sec)",
             "~0",
-            get_biased_current_time() - (self.ts_last as f64) / 1000.0
+            get_current_time() - (self.ts_last as f64) / 1000.0
+        )?;
+        writeln!(
+            buf,
+            "{:<52} {:>8} {:>12}",
+            "Number of counter_hi increments", "Few", self.n_counter_hi_increment
         )?;
         writeln!(
             buf,
             "{:<52} {:>8} {:>12.3}",
-            "Mean interval of counter updates (msec)",
-            "~1",
-            self.sum_intervals_counter_update as f64 / self.n_counter_update as f64
-        )?;
-        writeln!(
-            buf,
-            "{:<52} {:>8} {:>12.3}",
-            "Mean interval of per_sec_random updates (msec)",
+            "Mean interval of counter_hi updates (msec)",
             "~1000",
-            self.sum_intervals_per_sec_random_update as f64 / self.n_per_sec_random_update as f64
-        )?;
-
-        writeln!(
-            buf,
-            "{:<52} {:>8} {:>12}",
-            "1/0 ratio of each bit in counter at reset (min-max)",
-            "~0.500",
-            summarize_n_set_bits_by_pos(&self.n_ones_by_bit_counter, self.n_counter_update + 1)
+            self.sum_intervals_counter_hi_update as f64 / self.n_counter_hi_update as f64
         )?;
         writeln!(
             buf,
+            "{:<52} {:>8} {:>12.3}",
+            "Mean interval of counter_lo updates (msec)",
+            "~1",
+            self.sum_intervals_counter_lo_update as f64 / self.n_counter_lo_update as f64
+        )?;
+        writeln!(
+            buf,
             "{:<52} {:>8} {:>12}",
-            "1/0 ratio of each bit in per_sec_random (min-max)",
+            "1/0 ratio by bit of counter_hi at reset (min-max)",
             "~0.500",
             summarize_n_set_bits_by_pos(
-                &self.n_ones_by_bit_per_sec_random,
-                self.n_per_sec_random_update + 1
+                &self.n_ones_by_bit_counter_hi,
+                self.n_counter_hi_update + 1
             )
         )?;
         writeln!(
             buf,
             "{:<52} {:>8} {:>12}",
-            "1/0 ratio of each bit in per_gen_random (min-max)",
+            "1/0 ratio by bit of counter_lo at reset (min-max)",
             "~0.500",
-            summarize_n_set_bits_by_pos(&self.n_ones_by_bit_per_gen_random, self.n_processed)
+            summarize_n_set_bits_by_pos(
+                &self.n_ones_by_bit_counter_lo,
+                self.n_counter_lo_update + 1
+            )
+        )?;
+        writeln!(
+            buf,
+            "{:<52} {:>8} {:>12}",
+            "1/0 ratio by bit of entropy (min-max)",
+            "~0.500",
+            summarize_n_set_bits_by_pos(&self.n_ones_by_bit_entropy, self.n_processed)
         )?;
 
         Ok(())
@@ -221,12 +243,12 @@ impl Status {
 /// Holds representations and internal field values of a SCRU128 ID.
 #[derive(Clone, Eq, PartialEq, Hash, Debug, Default)]
 struct Identifier {
-    str_value: [u8; 26],
+    str_value: [u8; 25],
     int_value: u128,
     timestamp: u64,
-    counter: u32,
-    per_sec_random: u32,
-    per_gen_random: u32,
+    counter_hi: u32,
+    counter_lo: u32,
+    entropy: u32,
 }
 
 impl Identifier {
@@ -238,9 +260,9 @@ impl Identifier {
             0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
             0x08, 0x09, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e,
             0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c,
-            0x1d, 0x1e, 0x1f, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x0a,
+            0x1d, 0x1e, 0x1f, 0x20, 0x21, 0x22, 0x23, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x0a,
             0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18,
-            0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f, 0x20, 0x21, 0x22, 0x23, 0xff, 0xff, 0xff,
             0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
             0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
             0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
@@ -253,44 +275,37 @@ impl Identifier {
             0xff, 0xff, 0xff, 0xff,
         ];
 
-        if str_value.len() != 26 {
+        if str_value.len() != 25 {
             return None;
         }
-        let mut fixed_str = [0; 26];
+        let mut fixed_str = [0; 25];
         let bs = str_value.as_bytes();
-
-        fixed_str[0] = bs[0];
-        let mut int_value = DECODE_MAP[bs[0] as usize] as u128;
-        if int_value > 7 {
-            return None;
-        }
-
-        for i in 1..26 {
+        let mut int_value = 0u128;
+        for i in 0..25 {
             fixed_str[i] = bs[i];
             let n = DECODE_MAP[bs[i] as usize] as u128;
             if n == 0xff {
                 return None;
             }
-            int_value = (int_value << 5) | n;
+            int_value = int_value.checked_mul(36)?.checked_add(n)?;
         }
 
         Some(Self {
             str_value: fixed_str,
             int_value,
-            timestamp: (int_value >> 84) as u64,
-            counter: ((int_value >> 56) & 0xfff_ffff) as u32,
-            per_sec_random: ((int_value >> 32) & 0xff_ffff) as u32,
-            per_gen_random: (int_value & 0xffff_ffff) as u32,
+            timestamp: (int_value >> 80) as u64,
+            counter_hi: ((int_value >> 56) & 0xff_ffff) as u32,
+            counter_lo: ((int_value >> 32) & 0xff_ffff) as u32,
+            entropy: (int_value & 0xffff_ffff) as u32,
         })
     }
 }
 
-fn get_biased_current_time() -> f64 {
+fn get_current_time() -> f64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("clock may have gone backwards")
         .as_secs_f64()
-        - 1577836800.0
 }
 
 /// Used to count the number of set bits by bit position in the binary representations of integers.

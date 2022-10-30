@@ -1,12 +1,10 @@
-use std::env::args;
-use std::io;
 use std::io::prelude::*;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::{env, io, time};
 
 const STATS_INTERVAL: u64 = 10 * 1000;
 
 fn main() {
-    if let Some(arg) = args().nth(1) {
+    if let Some(arg) = env::args().nth(1) {
         let usage = "Usage: any-command-that-prints-identifiers-infinitely | scru128-test";
         if arg == "-h" || arg == "--help" {
             println!("{}", usage);
@@ -152,7 +150,7 @@ struct Status {
 }
 
 impl Status {
-    fn print(&self) -> Result<(), io::Error> {
+    fn print(&self) -> io::Result<()> {
         let time_elapsed = self.ts_last - self.ts_first;
 
         let mut buf = io::BufWriter::new(io::stdout());
@@ -302,8 +300,8 @@ impl Identifier {
 }
 
 fn get_current_time() -> f64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
+    time::SystemTime::now()
+        .duration_since(time::UNIX_EPOCH)
         .expect("clock may have gone backwards")
         .as_secs_f64()
 }

@@ -7,16 +7,15 @@ fn main() {
     if let Some(arg) = env::args().nth(1) {
         let usage = "Usage: any-command-that-prints-identifiers-infinitely | scru128-test";
         if arg == "-h" || arg == "--help" {
-            println!("{}", usage);
+            println!("{usage}");
         } else {
-            eprintln!("{}", usage);
-            eprintln!("Error: unknown argument: {}", arg);
+            eprintln!("{usage}");
+            eprintln!("Error: unknown argument: {arg}");
         }
         return;
     }
 
-    let stdin = io::stdin();
-    let mut reader = stdin.lock();
+    let mut reader = io::stdin().lock();
     let mut buffer = String::with_capacity(32);
     println!(
         "Reading IDs from stdin and will show stats every {} seconds. Press Ctrl-C to quit.",
@@ -25,22 +24,23 @@ fn main() {
 
     let mut st = Status::default();
     let mut prev = Identifier::default();
-    while reader.read_line(&mut buffer).unwrap() > 0 {
-        let line = buffer
-            .strip_suffix('\n')
-            .map_or(buffer.as_str(), |x| x.strip_suffix('\r').unwrap_or(x));
-        let opt = Identifier::new(line);
+    while {
         buffer.clear();
-        if opt.is_some() {
-            st.n_processed += 1;
-        } else {
+        reader.read_line(&mut buffer).unwrap() > 0
+    } {
+        let line = match buffer.strip_suffix('\n') {
+            Some(s) => s.strip_suffix('\r').unwrap_or(s),
+            None => buffer.as_str(),
+        };
+
+        let Some(e) = Identifier::new(line) else {
             eprintln!("Error: invalid string representation");
             st.n_errors += 1;
             continue;
-        }
+        };
 
-        let e = opt.unwrap();
-        if e.str_value <= prev.str_value {
+        st.n_processed += 1;
+        if e.str_bytes <= prev.str_bytes {
             eprintln!("Error: string representation not monotonically ordered");
             st.n_errors += 1;
             continue;
@@ -153,7 +153,7 @@ impl Status {
     fn print(&self) -> io::Result<()> {
         let time_elapsed = self.ts_last - self.ts_first;
 
-        let mut buf = io::BufWriter::new(io::stdout());
+        let mut buf = io::stdout().lock();
         writeln!(buf)?;
         writeln!(buf, "{:<52} {:>8} {:>12}", "STAT", "EXPECTED", "ACTUAL")?;
         writeln!(
@@ -241,7 +241,7 @@ impl Status {
 /// Holds representations and internal field values of a SCRU128 ID.
 #[derive(Clone, Eq, PartialEq, Hash, Debug, Default)]
 struct Identifier {
-    str_value: [u8; 25],
+    str_bytes: [u8; 25],
     int_value: u128,
     timestamp: u64,
     counter_hi: u32,
@@ -273,15 +273,10 @@ impl Identifier {
             0xff, 0xff, 0xff, 0xff,
         ];
 
-        if str_value.len() != 25 {
-            return None;
-        }
-        let mut fixed_str = [0; 25];
-        let bs = str_value.as_bytes();
+        let str_bytes = str_value.as_bytes().try_into().ok()?;
         let mut int_value = 0u128;
-        for i in 0..25 {
-            fixed_str[i] = bs[i];
-            let n = DECODE_MAP[bs[i] as usize] as u128;
+        for b in str_bytes {
+            let n = DECODE_MAP[b as usize] as u128;
             if n == 0xff {
                 return None;
             }
@@ -289,7 +284,7 @@ impl Identifier {
         }
 
         Some(Self {
-            str_value: fixed_str,
+            str_bytes,
             int_value,
             timestamp: (int_value >> 80) as u64,
             counter_hi: ((int_value >> 56) & 0xff_ffff) as u32,
@@ -312,8 +307,8 @@ fn count_set_bits_by_pos(counts: &mut [usize], mut n: u32) {
     #[cfg(any(target_pointer_width = "32", target_pointer_width = "64"))]
     let mut n: usize = n as usize;
 
-    for i in 0..counts.len() {
-        counts[counts.len() - 1 - i] += (n & 1) as usize;
+    for e in counts.iter_mut().rev() {
+        *e += (n & 1) as usize;
         n >>= 1;
     }
 }
@@ -332,5 +327,5 @@ fn summarize_n_set_bits_by_pos(counts: &[usize], n_samples: usize) -> String {
         }
     }
 
-    format!("{:.3}-{:.3}", min, max)
+    format!("{min:.3}-{max:.3}")
 }

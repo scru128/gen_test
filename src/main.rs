@@ -1,18 +1,25 @@
 use std::io::prelude::*;
+use std::process::ExitCode;
 use std::{env, io, time};
 
 const STATS_INTERVAL: u64 = 10 * 1000;
 
-fn main() {
-    if let Some(arg) = env::args().nth(1) {
-        let usage = "Usage: any-command-that-prints-identifiers-infinitely | scru128-test";
-        if arg == "-h" || arg == "--help" {
+fn main() -> io::Result<ExitCode> {
+    let mut args = env::args();
+    let program = args.next();
+    if let Some(arg) = args.next() {
+        let usage = format!(
+            "Usage: any-command-that-prints-identifiers-infinitely | {}",
+            program.as_deref().unwrap_or("scru128-test")
+        );
+        return if arg == "-h" || arg == "--help" {
             println!("{usage}");
+            Ok(ExitCode::SUCCESS)
         } else {
-            eprintln!("{usage}");
             eprintln!("Error: unknown argument: {arg}");
-        }
-        return;
+            eprintln!("{usage}");
+            Ok(ExitCode::FAILURE)
+        };
     }
 
     let mut reader = io::stdin().lock();
@@ -26,7 +33,7 @@ fn main() {
     let mut prev = Identifier::default();
     while {
         buffer.clear();
-        reader.read_line(&mut buffer).unwrap() > 0
+        reader.read_line(&mut buffer)? > 0
     } {
         let line = match buffer.strip_suffix('\n') {
             Some(s) => s.strip_suffix('\r').unwrap_or(s),
@@ -110,7 +117,7 @@ fn main() {
         // Triggered per STATS_INTERVAL seconds
         if e.timestamp > st.ts_last_stats_print + STATS_INTERVAL {
             if st.ts_last_stats_print > 0 {
-                st.print().unwrap();
+                st.print()?;
             }
             st.ts_last_stats_print = e.timestamp;
         }
@@ -120,9 +127,16 @@ fn main() {
     }
 
     if st.n_processed > 0 {
-        st.print().unwrap();
+        st.print()?;
     } else {
         eprintln!("Error: no valid ID processed");
+        return Ok(ExitCode::FAILURE);
+    }
+
+    if st.n_errors == 0 {
+        Ok(ExitCode::SUCCESS)
+    } else {
+        Ok(ExitCode::FAILURE)
     }
 }
 

@@ -23,7 +23,7 @@ fn main() -> io::Result<ExitCode> {
     }
 
     let mut reader = io::stdin().lock();
-    let mut buffer = String::with_capacity(32);
+    let mut buffer = Vec::with_capacity(32);
     println!(
         "Reading IDs from stdin and will show stats every {} seconds. Press Ctrl-C to quit.",
         STATS_INTERVAL / 1000
@@ -33,11 +33,11 @@ fn main() -> io::Result<ExitCode> {
     let mut prev = Identifier::default();
     while {
         buffer.clear();
-        reader.read_line(&mut buffer)? > 0
+        reader.read_until(b'\n', &mut buffer)? > 0
     } {
-        let line = match buffer.strip_suffix('\n') {
-            Some(s) => s.strip_suffix('\r').unwrap_or(s),
-            None => buffer.as_str(),
+        let line = match buffer.strip_suffix(b"\n") {
+            Some(s) => s.strip_suffix(b"\r").unwrap_or(s),
+            None => &buffer,
         };
 
         let Some(e) = Identifier::new(line) else {
@@ -264,7 +264,7 @@ struct Identifier {
 }
 
 impl Identifier {
-    fn new(str_value: &str) -> Option<Self> {
+    fn new(str_bytes: &[u8]) -> Option<Self> {
         const DECODE_MAP: [u8; 256] = [
             0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
             0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
@@ -287,7 +287,7 @@ impl Identifier {
             0xff, 0xff, 0xff, 0xff,
         ];
 
-        let str_bytes = str_value.as_bytes().try_into().ok()?;
+        let str_bytes = str_bytes.try_into().ok()?;
         let mut int_value = 0u128;
         for b in str_bytes {
             let n = DECODE_MAP[b as usize] as u128;

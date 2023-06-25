@@ -287,14 +287,32 @@ impl Identifier {
             0xff, 0xff, 0xff, 0xff,
         ];
 
-        let str_bytes = str_bytes.try_into().ok()?;
+        let str_bytes = <[u8; 25]>::try_from(str_bytes).ok()?;
         let mut int_value = 0u128;
-        for b in str_bytes {
-            let n = DECODE_MAP[b as usize] as u128;
+
+        let mut buffer = 0u64;
+        let mut i = 0;
+        while i < 25 {
+            let n = DECODE_MAP[str_bytes[i] as usize] as u64;
             if n == 0xff {
                 return None;
             }
-            int_value = int_value.checked_mul(36)?.checked_add(n)?;
+
+            buffer = buffer * 36 + n;
+            match i {
+                11 | 23 => {
+                    int_value = int_value
+                        .checked_mul(36u128.pow(12))?
+                        .checked_add(buffer.into())?;
+                    buffer = 0;
+                }
+                24 => {
+                    int_value = int_value.checked_mul(36)?.checked_add(buffer.into())?;
+                }
+                _ => {}
+            }
+
+            i += 1;
         }
 
         Some(Self {

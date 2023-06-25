@@ -1,6 +1,6 @@
 use std::io::prelude::*;
 use std::process::ExitCode;
-use std::{env, io, time};
+use std::{env, io, mem, time};
 
 const STATS_INTERVAL: u64 = 10 * 1000;
 
@@ -299,18 +299,15 @@ impl Identifier {
             }
 
             buffer = buffer * 36 + n;
-            match i {
-                11 | 23 => {
-                    int_value = int_value
-                        .checked_mul(36u128.pow(12))?
-                        .checked_add(buffer.into())?;
-                    buffer = 0;
-                }
-                24 => {
-                    int_value = int_value.checked_mul(36)?.checked_add(buffer.into())?;
-                }
-                _ => {}
-            }
+            int_value = match i {
+                7 | 15 => int_value
+                    .checked_mul(36u128.pow(8))?
+                    .checked_add(mem::replace(&mut buffer, 0).into())?,
+                24 => int_value
+                    .checked_mul(36u128.pow(9))?
+                    .checked_add(mem::replace(&mut buffer, 0).into())?,
+                _ => int_value,
+            };
 
             i += 1;
         }

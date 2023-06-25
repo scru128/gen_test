@@ -23,7 +23,7 @@ cargo install --git https://github.com/scru128/gen_test.git
 
 ## License
 
-Copyright 2021-2022 LiosK
+Copyright 2021-2023 LiosK
 
 Licensed under the Apache License, Version 2.0.
 
